@@ -141,7 +141,7 @@ else:
                 st.markdown(f"- **α₂:** {res['outlet']['alpha']:.1f}° &nbsp;|&nbsp; **β₂:** {res['outlet']['beta']:.1f}°")
 
             def plot_triangle(tri, title):
-                fig, ax = plt.subplots(figsize=(6, 4))
+                fig, ax = plt.subplots(figsize=(5, 5))
                 
                 # Desenhando Vetores
                 ax.annotate("", xy=(tri['U'], 0), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#3b82f6", lw=2.5))
@@ -174,9 +174,9 @@ else:
                 mid_x = (max_x + min_x) / 2
                 mid_y = (max_y + min_y) / 2
                 
-                # Travar a janela de exibição
-                ax.set_xlim(mid_x - max_range * 0.6, mid_x + max_range * 0.6)
-                ax.set_ylim(min_y - max_range * 0.2, max_y + max_range * 0.2)
+                # Travar a janela de exibição (Aspect Ratio 1:1 - Box Quadrada)
+                ax.set_xlim(mid_x - max_range * 0.7, mid_x + max_range * 0.7)
+                ax.set_ylim(mid_y - max_range * 0.7, mid_y + max_range * 0.7)
                 ax.set_aspect('equal', adjustable='box')
                 ax.set_title(title, fontweight='bold', color="#1e293b", pad=15)
                 ax.grid(True, linestyle=':', alpha=0.6)
