@@ -131,7 +131,7 @@ else:
             st.warning("O modo cinemático está desativado. Os triângulos abaixo representam valores empíricos genéricos.")
             
         def plot_triangle(tri, title):
-            fig, ax = st.subplots(figsize=(6, 4))
+            fig, ax = plt.subplots(figsize=(6, 4))
             # Vetor U
             ax.annotate(f"U={tri['U']:.1f}", xy=(tri['U'], 0), xytext=(tri['U']/2, -tri['Cm']*0.1),
                         arrowprops=dict(color='blue', width=2, headwidth=8), color='blue')
