@@ -105,7 +105,7 @@ res = solve_hydro(Q, H, f, p, eta, advanced, cRPM, D1, B1, a1, D2, a2)
 if not res:
     st.error("Valores de entrada inválidos. Verifique os dados inseridos.")
 else:
-    tab1, tab_geo, tab2, tab3, tab4 = st.tabs(["1. Resultados", "2. Geometria", "3. Cinemática", "4. Triângulos", "5. CFD"])
+    tab1, tab_geo, tab_cfd = st.tabs(["1. Resultados & Cinemática", "2. Geometria", "3. CFD & Setup"])
     
     with tab1:
         st.subheader(f"Turbina Indicada: **{res['type']}**")
@@ -115,6 +115,83 @@ else:
         col3.metric("Rotação Síncrona", f"{res['N']:.1f} RPM")
         col4.metric("Diâmetro D1 (Est.)", f"{res['D1']:.2f} m")
         
+        if not advanced:
+            st.info("Ative o **Modo Cinemático** na barra lateral para habilitar resultados cinemáticos (Euler e Triângulos).")
+        else:
+            st.markdown("---")
+            st.subheader("Cinemática de Euler")
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Carga Específica (Heuler)", f"{res['Heuler']:.1f} m", help="Energia bruta extraída")
+            c2.metric("Potência (Euler)", f"{res['Pe_kW']:.0f} kW")
+            c3.metric("Rend. Hidráulico (η_h)", f"{res['effHyd']*100:.1f} %")
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.subheader("Triângulos de Velocidade")
+            
+            # Painéis de Velocidades e Ângulos
+            vc1, vc2 = st.columns(2)
+            with vc1:
+                st.markdown("**Seção 1 (Entrada)**")
+                st.markdown(f"- **U₁:** {res['inlet']['U']:.1f} m/s &nbsp;|&nbsp; **C₁:** {res['inlet']['C']:.1f} m/s &nbsp;|&nbsp; **W₁:** {res['inlet']['W']:.1f} m/s")
+                st.markdown(f"- **α₁:** {res['inlet']['alpha']:.1f}° &nbsp;|&nbsp; **β₁:** {res['inlet']['beta']:.1f}°")
+            with vc2:
+                st.markdown("**Seção 2 (Saída)**")
+                st.markdown(f"- **U₂:** {res['outlet']['U']:.1f} m/s &nbsp;|&nbsp; **C₂:** {res['outlet']['C']:.1f} m/s &nbsp;|&nbsp; **W₂:** {res['outlet']['W']:.1f} m/s")
+                st.markdown(f"- **α₂:** {res['outlet']['alpha']:.1f}° &nbsp;|&nbsp; **β₂:** {res['outlet']['beta']:.1f}°")
+
+            def plot_triangle(tri, title):
+                fig, ax = plt.subplots(figsize=(6, 4))
+                
+                # Desenhando Vetores
+                ax.annotate("", xy=(tri['U'], 0), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#3b82f6", lw=2.5))
+                ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#ef4444", lw=2.5))
+                ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(tri['U'], 0), arrowprops=dict(arrowstyle="->", color="#10b981", lw=2.5))
+                
+                # Labels dos Vetores
+                ax.text(tri['U']/2, -tri['Cm']*0.05, f"U", color="#3b82f6", ha='center', va='top', fontweight='bold')
+                ax.text(tri['Cu']/2 - tri['U']*0.02, tri['Cm']/2, f"C", color="#ef4444", ha='right', va='bottom', fontweight='bold')
+                ax.text((tri['U'] + tri['Cu'])/2 + 0.1, tri['Cm']/2, f"W", color="#10b981", ha='left', va='bottom', fontweight='bold')
+                
+                # Ângulos
+                ax.text(tri['Cu']*0.1, tri['Cm']*0.05, f"α", color="#ef4444", fontsize=10, fontweight='bold', ha='left')
+                dx_w = tri['Cu'] - tri['U']
+                ax.text(tri['U'] + dx_w*0.1, tri['Cm']*0.05, f"β", color="#10b981", fontsize=10, fontweight='bold', ha='right' if dx_w < 0 else 'left')
+
+                # Linhas de guia (Meridional e Tangencial)
+                ax.plot([tri['Cu'], tri['Cu']], [0, tri['Cm']], color='black', linestyle='--', alpha=0.3)
+                
+                all_x = [0, tri['U'], tri['Cu']]
+                all_y = [0, tri['Cm']]
+                min_x, max_x = min(all_x), max(all_x)
+                min_y, max_y = min(all_y), max(all_y)
+                
+                range_x = max_x - min_x
+                range_y = max_y - min_y
+                max_range = max(range_x, range_y)
+                if max_range == 0: max_range = 1
+                
+                mid_x = (max_x + min_x) / 2
+                mid_y = (max_y + min_y) / 2
+                
+                # Travar a janela de exibição
+                ax.set_xlim(mid_x - max_range * 0.6, mid_x + max_range * 0.6)
+                ax.set_ylim(min_y - max_range * 0.2, max_y + max_range * 0.2)
+                ax.set_aspect('equal', adjustable='box')
+                ax.set_title(title, fontweight='bold', color="#1e293b", pad=15)
+                ax.grid(True, linestyle=':', alpha=0.6)
+                
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.spines['left'].set_color('#cbd5e1')
+                ax.spines['bottom'].set_color('#cbd5e1')
+                
+                return fig
+                
+            col_t1, col_t2 = st.columns(2)
+            with col_t1: st.pyplot(plot_triangle(res['inlet'], "Rotor - Seção 1 (Entrada)"))
+            with col_t2: st.pyplot(plot_triangle(res['outlet'], "Rotor - Seção 2 (Saída)"))
+        
     with tab_geo:
         st.subheader("Configuração Paramétrica do Rotor")
         if advanced and res['D1'] <= res['D2']:
@@ -122,8 +199,8 @@ else:
         
         def plot_rotor_schematic(d1, d2, b1):
             fig, ax = plt.subplots(figsize=(6, 5))
-            ax.plot([0, 0], [-b1*2, b1*2], 'k-.', lw=1, alpha=0.5)
-            ax.text(0, b1*2, "Eixo de\\nRotação", ha='center', va='bottom', fontsize=9, color='gray')
+            ax.plot([0, 0], [-b1*3, b1*3], 'k-.', lw=1, alpha=0.5)
+            ax.text(0, b1*3, "Eixo de\\nRotação", ha='center', va='bottom', fontsize=9, color='gray')
 
             # Meridional Cross Section
             ax.plot([0, d1/2], [b1, b1], 'k-', lw=2) # Hub
@@ -141,7 +218,15 @@ else:
             ax.plot([], [], color='#3b82f6', lw=4, label='Entrada (D1, B1)')
             ax.plot([], [], color='#ef4444', lw=4, label='Saída (D2)')
             ax.plot([], [], color='black', lw=2, label='Coroa / Cinta')
-            ax.legend(loc='upper right', fontsize=8)
+            ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.2), ncol=3, fontsize=8)
+            
+            # Scale fix without stretching
+            max_r = max(d1, d2) / 2
+            win_size = max(max_r, b1*2) * 1.5
+            mid_y = 0
+            mid_x = max_r / 2
+            ax.set_xlim(mid_x - win_size*0.7, mid_x + win_size*0.7)
+            ax.set_ylim(-win_size*0.7, win_size*0.7)
             
             ax.set_aspect('equal', adjustable='box')
             ax.axis('off')
@@ -153,85 +238,7 @@ else:
         with col_g2:
             st.info("O modelo 1D constrói o perfil meridional baseando-se no diâmetro externo, interno e altura da pá.")
             
-    with tab2:
-        if not advanced:
-            st.info("Ative o **Modo Cinemático** na barra lateral para definir parâmetros analíticos de Euler.")
-        
-        st.subheader("Balanço de Quantidade de Movimento")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Carga Específica (Heuler)", f"{res['Heuler']:.1f} m", help="Energia bruta extraída")
-        c2.metric("Potência (Euler)", f"{res['Pe_kW']:.0f} kW")
-        c3.metric("Rend. Hidráulico (η_h)", f"{res['effHyd']*100:.1f} %")
-        
-    with tab3:
-        st.subheader("Vetores Cinemáticos")
-        if not advanced:
-            st.warning("O modo cinemático está desativado. Os triângulos abaixo representam valores empíricos genéricos.")
-            
-        def plot_triangle(tri, title):
-            fig, ax = plt.subplots(figsize=(8, 5))
-            
-            # Ponto O (Origem = 0,0)
-            # Ponto U (Ponta vetor U = U, 0)
-            # Ponto C (Ponta vetor C = Cu, Cm)
-            
-            # Desenhando Vetores
-            ax.annotate("", xy=(tri['U'], 0), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#3b82f6", lw=2.5))
-            ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#ef4444", lw=2.5))
-            ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(tri['U'], 0), arrowprops=dict(arrowstyle="->", color="#10b981", lw=2.5))
-            
-            # Labels dos Vetores
-            ax.text(tri['U']/2, -tri['Cm']*0.05, f"U = {tri['U']:.1f} m/s", color="#3b82f6", ha='center', va='top', fontweight='bold')
-            ax.text(tri['Cu']/2 - tri['U']*0.02, tri['Cm']/2, f"C = {tri['C']:.1f}", color="#ef4444", ha='right', va='bottom', fontweight='bold')
-            ax.text((tri['U'] + tri['Cu'])/2 + 0.1, tri['Cm']/2, f"W = {tri['W']:.1f}", color="#10b981", ha='left', va='bottom', fontweight='bold')
-            
-            # Ângulos
-            alpha_str = f"α={tri['alpha']:.1f}°"
-            beta_str = f"β={tri['beta']:.1f}°"
-            ax.text(tri['Cu']*0.1, tri['Cm']*0.05, alpha_str, color="#ef4444", fontsize=10, fontweight='bold', ha='left')
-            
-            # Posicionamento Beta:
-            dx_w = tri['Cu'] - tri['U']
-            ax.text(tri['U'] + dx_w*0.1, tri['Cm']*0.05, beta_str, color="#10b981", fontsize=10, fontweight='bold', ha='right' if dx_w < 0 else 'left')
-
-            # Linhas de guia (Meridional e Tangencial)
-            ax.plot([tri['Cu'], tri['Cu']], [0, tri['Cm']], color='black', linestyle='--', alpha=0.3)
-            ax.text(tri['Cu'], tri['Cm']/2, f"Cm={tri['Cm']:.1f}", fontsize=8, color="gray", rotation=90, verticalalignment='center')
-            
-            # Configuração de eixos paramétrica bloqueada (Square Box)
-            all_x = [0, tri['U'], tri['Cu']]
-            all_y = [0, tri['Cm']]
-            min_x, max_x = min(all_x), max(all_x)
-            min_y, max_y = min(all_y), max(all_y)
-            
-            range_x = max_x - min_x
-            range_y = max_y - min_y
-            max_range = max(range_x, range_y)
-            if max_range == 0: max_range = 1
-            
-            mid_x = (max_x + min_x) / 2
-            mid_y = (max_y + min_y) / 2
-            
-            # Travar a janela de exibição exatamente ao redor do centro do triângulo
-            ax.set_xlim(mid_x - max_range * 0.6, mid_x + max_range * 0.6)
-            ax.set_ylim(mid_y - max_range * 0.6, mid_y + max_range * 0.6)
-            ax.set_aspect('equal', adjustable='box')
-            ax.set_title(title, fontweight='bold', color="#1e293b", pad=15)
-            ax.grid(True, linestyle=':', alpha=0.6)
-            
-            # Esconder bordas superiores e laterais
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.spines['left'].set_color('#cbd5e1')
-            ax.spines['bottom'].set_color('#cbd5e1')
-            
-            return fig
-            
-        col_t1, col_t2 = st.columns(2)
-        with col_t1: st.pyplot(plot_triangle(res['inlet'], "Entrada no Rotor (Seção 1)"))
-        with col_t2: st.pyplot(plot_triangle(res['outlet'], "Saída do Rotor (Seção 2)"))
-        
-    with tab4:
+    with tab_cfd:
         st.subheader("Setup para ANSYS / CFX")
         script = f'''// CONDIÇÕES DE OPERAÇÃO
 Rotational_Speed_rads = {res['omega']:.4f} [rad/s]
