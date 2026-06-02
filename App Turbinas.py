@@ -1,242 +1,270 @@
-import React, { useState } from 'react';
-import { HydroInputs, HydroOutputs, VelocityTriangle } from '../types';
+import streamlit as st
+import math
+import numpy as np
+import matplotlib.pyplot as plt
 
-interface Props {
-  inputs: HydroInputs;
-  outputs: HydroOutputs;
-}
+st.set_page_config(page_title="Hydro Sizer Pro", layout="wide", page_icon="🌊")
 
-export function Dashboard({ inputs, outputs }: Props) {
-  const { N, P_MW, Ns, turbineType, D1_est, Heuler, eulerPowerkW, hydraulicEfficiency, inlet, outlet } = outputs;
-  const [simTorque, setSimTorque] = useState<number | ''>('');
-  const [simHead, setSimHead] = useState<number | ''>('');
+st.title("🌊 Dimensionamento de Turbinas Hidráulicas")
+st.markdown("""
+Este aplicativo interativo realiza o pré-dimensionamento, classificação estatística e a modelagem 
+cinemática (1D/Euler) de turbinas hidráulicas para setups de CFD.
+""")
 
-  // CFD Validation Math
-  let powerSimkW = 0, effGlobal = 0, effEuler = 0, effTargetGlobal = 0, effTargetEuler = 0;
-  const hasCFD = typeof simTorque === 'number' && simTorque > 0;
-  
-  if (hasCFD) {
-    const powerSimW = simTorque * outputs.omega;
-    powerSimkW = powerSimW / 1000;
-    effTargetGlobal = (simTorque / outputs.torque) * 100;
-    effTargetEuler = (simTorque / outputs.eulerTorque) * 100;
+def solve_hydro(Q, H, f, p, eta, advanced, cRPM, D1, B1, a1, D2, a2):
+    rho = 1000
+    g = 9.81
+    if p <= 0 or H <= 0 or Q <= 0: return None
     
-    if (typeof simHead === 'number' && simHead > 0) {
-      const hydraulicPowerCFD = outputs.massFlow * 9.81 * simHead;
-      effGlobal = (powerSimW / hydraulicPowerCFD) * 100;
-      effEuler = (powerSimW / (outputs.massFlow * 9.81 * Heuler)) * 100;
+    sync_N = (60 * f) / p
+    N = cRPM if (advanced and cRPM > 0) else sync_N
+    
+    P_W = eta * rho * g * Q * H
+    P_kW = P_W / 1000
+    P_MW = P_kW / 1000
+    
+    Ns = (N * math.sqrt(P_kW)) / (H ** 1.25)
+    if Ns < 35: t_type = 'Pelton'
+    elif Ns < 350: t_type = 'Francis'
+    else: t_type = 'Kaplan'
+    
+    Ku = 0.31 + (0.001 * Ns)
+    sqrt2gH = math.sqrt(2 * g * H)
+    U1_emp = Ku * sqrt2gH
+    D1_emp = (60 * U1_emp) / (math.pi * N)
+    D2_emp = D1_emp * 0.6
+    Cm1_emp = 0.2 * sqrt2gH
+    B1_emp = Q / (math.pi * D1_emp * Cm1_emp)
+    
+    D1_real = D1 if (advanced and D1 > 0) else D1_emp
+    B1_real = B1 if (advanced and B1 > 0) else B1_emp
+    a1_real = a1 if advanced else 15
+    D2_real = D2 if (advanced and D2 > 0) else D2_emp
+    a2_real = a2 if advanced else 90
+    
+    omega = (N * math.pi) / 30
+    massFlow = Q * rho
+    
+    def to_rad(d): return d * math.pi / 180
+    def to_deg(r): return r * 180 / math.pi
+    
+    U1 = (math.pi * D1_real * N) / 60
+    Cm1 = Q / (math.pi * D1_real * B1_real)
+    Cu1 = 0 if a1_real == 90 else Cm1 / math.tan(to_rad(a1_real))
+    C1 = math.sqrt(Cm1**2 + Cu1**2)
+    Wu1 = U1 - Cu1
+    W1 = math.sqrt(Cm1**2 + Wu1**2)
+    beta1 = to_deg(math.atan2(Cm1, Wu1))
+    inlet = {"U": U1, "Cm": Cm1, "Cu": Cu1, "C": C1, "Wu": Wu1, "W": W1, "alpha": a1_real, "beta": beta1}
+    
+    U2 = (math.pi * D2_real * N) / 60
+    Area2 = (math.pi * D2_real**2) / 4
+    Cm2 = Q / Area2
+    Cu2 = 0 if a2_real == 90 else Cm2 / math.tan(to_rad(a2_real))
+    C2 = math.sqrt(Cm2**2 + Cu2**2)
+    Wu2 = U2 - Cu2
+    W2 = math.sqrt(Cm2**2 + Wu2**2)
+    beta2 = to_deg(math.atan2(Cm2, Wu2))
+    outlet = {"U": U2, "Cm": Cm2, "Cu": Cu2, "C": C2, "Wu": Wu2, "W": W2, "alpha": a2_real, "beta": beta2}
+    
+    EulerWork = (U1 * Cu1) - (U2 * Cu2)
+    Heuler = EulerWork / g
+    eulerPowerW = massFlow * EulerWork
+    effHyd = Heuler / H if H > 0 else 0
+    eulerTorque = eulerPowerW / omega if omega > 0 else 0
+    globalTorque = P_W / omega if omega > 0 else 0
+    
+    return {
+        "N": N, "P_MW": P_MW, "P_kW": P_kW, "Ns": Ns, "type": t_type, "D1": D1_real, "D2": D2_real,
+        "omega": omega, "massFlow": massFlow, "Heuler": Heuler, "Pe_kW": eulerPowerW/1000,
+        "effHyd": effHyd, "Te": eulerTorque, "Tg": globalTorque, "inlet": inlet, "outlet": outlet,
+        "H": H, "B1": B1_real
     }
-  }
 
-  const cfdScript = `// ANSYS / CFX BOUNDARY CONDITIONS
-Rotational_Speed_rads = ${outputs.omega.toFixed(4)} [rad/s]
-Rotational_Speed_RPM  = ${outputs.N.toFixed(2)} [rpm]
-Mass_Flow_Rate        = ${outputs.massFlow.toFixed(2)} [kg/s]
+with st.sidebar:
+    st.header("⚙️ Entradas Principais")
+    Q = st.number_input("Vazão (Q) [m³/s]", value=15.0, min_value=0.1)
+    H = st.number_input("Queda Líquida (H) [m]", value=120.0, min_value=0.1)
+    f = st.selectbox("Frequência [Hz]", [50, 60], index=1)
+    p = st.number_input("Pares Polo (p)", value=6, min_value=1)
+    eta = st.number_input("Eficiência Global Est. (η)", value=0.88, max_value=1.0)
+    
+    st.markdown("---")
+    advanced = st.checkbox("Modo Cinemático & Geometria")
+    cRPM, D1, B1, a1, D2, a2 = 0,0,0,0,0,0
+    if advanced:
+        cRPM = st.number_input("RPM Forçado [RPM]", value=600.0)
+        D1 = st.number_input("D1 (Entrada) [m]", value=1.5)
+        B1 = st.number_input("B1 (Altura) [m]", value=0.3)
+        a1 = st.number_input("α₁ (Ataque) [°]", value=15.0)
+        D2 = st.number_input("D2 (Saída) [m]", value=0.9)
+        a2 = st.number_input("α₂ (Saída) [°]", value=90.0, help="90° = sem redemoinho")
+
+res = solve_hydro(Q, H, f, p, eta, advanced, cRPM, D1, B1, a1, D2, a2)
+
+if not res:
+    st.error("Valores de entrada inválidos. Verifique os dados inseridos.")
+else:
+    tab1, tab_geo, tab2, tab3, tab4 = st.tabs(["1. Resultados", "2. Geometria", "3. Cinemática", "4. Triângulos", "5. CFD"])
+    
+    with tab1:
+        st.subheader(f"Turbina Indicada: **{res['type']}**")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Rot. Específica (Ns)", f"{res['Ns']:.1f}")
+        col2.metric("Potência Base (Global)", f"{res['P_MW']:.2f} MW")
+        col3.metric("Rotação Síncrona", f"{res['N']:.1f} RPM")
+        col4.metric("Diâmetro D1 (Est.)", f"{res['D1']:.2f} m")
+        
+    with tab_geo:
+        st.subheader("Configuração Paramétrica do Rotor")
+        if advanced and res['D1'] <= res['D2']:
+            st.error("🚨 **Aviso de Segurança Geométrico:** O diâmetro de entrada (D1) não pode ser menor ou igual ao diâmetro de saída (D2). Em turbinas centrípetas, o fluxo entra pelo diâmetro maior e sai pelo menor.")
+        
+        def plot_rotor_schematic(d1, d2, b1):
+            fig, ax = plt.subplots(figsize=(6, 5))
+            ax.plot([0, 0], [-b1*2, b1*2], 'k-.', lw=1, alpha=0.5)
+            ax.text(0, b1*2, "Eixo de\\nRotação", ha='center', va='bottom', fontsize=9, color='gray')
+
+            # Meridional Cross Section
+            ax.plot([0, d1/2], [b1, b1], 'k-', lw=2) # Hub
+            ax.plot([d1/2, d1/2], [0, b1], color='#3b82f6', lw=4) # Inlet
+            ax.plot([d1/2, d2/2], [0, -b1], 'k-', lw=2) # Band
+            ax.plot([d2/2, 0], [-b1, -b1], color='#ef4444', lw=4) # Outlet
+            ax.plot([0, 0], [b1, -b1], 'k-', lw=1, alpha=0.3)
+            
+            # Anotações
+            ax.annotate(f"D1={d1:.2f}m", xy=(d1/2, b1/2), xytext=(d1/2 + d1*0.1, b1/2), arrowprops=dict(arrowstyle="->"))
+            ax.annotate(f"B1={b1:.2f}m", xy=(d1/2, b1), xytext=(d1/2, b1 + b1*0.5), arrowprops=dict(arrowstyle="->"), ha='center')
+            ax.annotate(f"D2={d2:.2f}m", xy=(d2/2, -b1), xytext=(d2/2 + d1*0.1, -b1 - b1*0.5), arrowprops=dict(arrowstyle="->"))
+            
+            # Legenda
+            ax.plot([], [], color='#3b82f6', lw=4, label='Entrada (D1, B1)')
+            ax.plot([], [], color='#ef4444', lw=4, label='Saída (D2)')
+            ax.plot([], [], color='black', lw=2, label='Coroa / Cinta')
+            ax.legend(loc='upper right', fontsize=8)
+            
+            ax.set_aspect('equal', adjustable='box')
+            ax.axis('off')
+            return fig
+
+        col_g1, col_g2 = st.columns([2, 1])
+        with col_g1:
+            st.pyplot(plot_rotor_schematic(res['D1'], res['D2'], res['B1']))
+        with col_g2:
+            st.info("O modelo 1D constrói o perfil meridional baseando-se no diâmetro externo, interno e altura da pá.")
+            
+    with tab2:
+        if not advanced:
+            st.info("Ative o **Modo Cinemático** na barra lateral para definir parâmetros analíticos de Euler.")
+        
+        st.subheader("Balanço de Quantidade de Movimento")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Carga Específica (Heuler)", f"{res['Heuler']:.1f} m", help="Energia bruta extraída")
+        c2.metric("Potência (Euler)", f"{res['Pe_kW']:.0f} kW")
+        c3.metric("Rend. Hidráulico (η_h)", f"{res['effHyd']*100:.1f} %")
+        
+    with tab3:
+        st.subheader("Vetores Cinemáticos")
+        if not advanced:
+            st.warning("O modo cinemático está desativado. Os triângulos abaixo representam valores empíricos genéricos.")
+            
+        def plot_triangle(tri, title):
+            fig, ax = plt.subplots(figsize=(8, 5))
+            
+            # Ponto O (Origem = 0,0)
+            # Ponto U (Ponta vetor U = U, 0)
+            # Ponto C (Ponta vetor C = Cu, Cm)
+            
+            # Desenhando Vetores
+            ax.annotate("", xy=(tri['U'], 0), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#3b82f6", lw=2.5))
+            ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#ef4444", lw=2.5))
+            ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(tri['U'], 0), arrowprops=dict(arrowstyle="->", color="#10b981", lw=2.5))
+            
+            # Labels dos Vetores
+            ax.text(tri['U']/2, -tri['Cm']*0.05, f"U = {tri['U']:.1f} m/s", color="#3b82f6", ha='center', va='top', fontweight='bold')
+            ax.text(tri['Cu']/2 - tri['U']*0.02, tri['Cm']/2, f"C = {tri['C']:.1f}", color="#ef4444", ha='right', va='bottom', fontweight='bold')
+            ax.text((tri['U'] + tri['Cu'])/2 + 0.1, tri['Cm']/2, f"W = {tri['W']:.1f}", color="#10b981", ha='left', va='bottom', fontweight='bold')
+            
+            # Ângulos
+            alpha_str = f"α={tri['alpha']:.1f}°"
+            beta_str = f"β={tri['beta']:.1f}°"
+            ax.text(tri['Cu']*0.1, tri['Cm']*0.05, alpha_str, color="#ef4444", fontsize=10, fontweight='bold', ha='left')
+            
+            # Posicionamento Beta:
+            dx_w = tri['Cu'] - tri['U']
+            ax.text(tri['U'] + dx_w*0.1, tri['Cm']*0.05, beta_str, color="#10b981", fontsize=10, fontweight='bold', ha='right' if dx_w < 0 else 'left')
+
+            # Linhas de guia (Meridional e Tangencial)
+            ax.plot([tri['Cu'], tri['Cu']], [0, tri['Cm']], color='black', linestyle='--', alpha=0.3)
+            ax.text(tri['Cu'], tri['Cm']/2, f"Cm={tri['Cm']:.1f}", fontsize=8, color="gray", rotation=90, verticalalignment='center')
+            
+            # Configuração de eixos paramétrica bloqueada (Square Box)
+            all_x = [0, tri['U'], tri['Cu']]
+            all_y = [0, tri['Cm']]
+            min_x, max_x = min(all_x), max(all_x)
+            min_y, max_y = min(all_y), max(all_y)
+            
+            range_x = max_x - min_x
+            range_y = max_y - min_y
+            max_range = max(range_x, range_y)
+            if max_range == 0: max_range = 1
+            
+            mid_x = (max_x + min_x) / 2
+            mid_y = (max_y + min_y) / 2
+            
+            # Travar a janela de exibição exatamente ao redor do centro do triângulo
+            ax.set_xlim(mid_x - max_range * 0.6, mid_x + max_range * 0.6)
+            ax.set_ylim(mid_y - max_range * 0.6, mid_y + max_range * 0.6)
+            ax.set_aspect('equal', adjustable='box')
+            ax.set_title(title, fontweight='bold', color="#1e293b", pad=15)
+            ax.grid(True, linestyle=':', alpha=0.6)
+            
+            # Esconder bordas superiores e laterais
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#cbd5e1')
+            ax.spines['bottom'].set_color('#cbd5e1')
+            
+            return fig
+            
+        col_t1, col_t2 = st.columns(2)
+        with col_t1: st.pyplot(plot_triangle(res['inlet'], "Entrada no Rotor (Seção 1)"))
+        with col_t2: st.pyplot(plot_triangle(res['outlet'], "Saída do Rotor (Seção 2)"))
+        
+    with tab4:
+        st.subheader("Setup para ANSYS / CFX")
+        script = f'''// CONDIÇÕES DE OPERAÇÃO
+Rotational_Speed_rads = {res['omega']:.4f} [rad/s]
+Rotational_Speed_RPM  = {res['N']:.2f} [rpm]
+Mass_Flow_Rate        = {res['massFlow']:.2f} [kg/s]
 
 // GEOMETRIA E ANGULOS
-Diameter_Outer_D1     = ${outputs.D1_est.toFixed(3)} [m]
-Diameter_Inner_D2     = ${outputs.D2_est.toFixed(3)} [m]
-Angle_Beta_1          = ${inlet ? inlet.beta.toFixed(2) : 'N/A'} [deg]
-Angle_Beta_2          = ${outlet ? outlet.beta.toFixed(2) : 'N/A'} [deg]
+Diameter_Outer_D1     = {res['D1']:.3f} [m]
+Diameter_Inner_D2     = {res['D2']:.3f} [m]
+Angle_Beta_1          = {res['inlet']['beta']:.2f} [deg]
+Angle_Beta_2          = {res['outlet']['beta']:.2f} [deg]
 
-// ALVOS TEÓRICOS DE TORQUE
-Target_Torque_Global  = ${outputs.torque.toFixed(2)} [N·m]
-Target_Torque_Euler   = ${outputs.eulerTorque.toFixed(2)} [N·m]
-`;
-
-  return (
-    <div className="space-y-6 pb-20">
-      
-      {/* 1. SELEÇÃO E RESULTADOS GLOBAIS */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-extrabold text-slate-800">1. Dimensionamento Global e Seleção</h2>
-            <p className="text-xs text-slate-500 font-medium mt-1">Estimativa macroscópica com base no balanço de energia (Eficiência Estipulada).</p>
-          </div>
-          <span className={`px-5 py-2 rounded-lg text-sm font-bold tracking-widest uppercase flex items-center justify-center shrink-0 ${
-            turbineType === 'Pelton' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
-            turbineType === 'Francis' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
-            turbineType === 'Kaplan' ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-red-100 text-red-800'
-          }`}>
-            Turbina {turbineType}
-          </span>
-        </div>
-        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-6 bg-slate-50/50">
-          <div>
-            <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Rot. Específica (Ns)</p>
-            <p className="text-3xl font-extrabold text-slate-900">{Ns.toFixed(1)}</p>
-          </div>
-          <div>
-             <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Potência Estimada</p>
-            <p className="text-3xl font-extrabold text-slate-900">{P_MW.toFixed(2)} <span className="text-lg text-slate-400 font-medium">MW</span></p>
-          </div>
-          <div>
-             <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Rotação Síncrona</p>
-            <p className="text-3xl font-extrabold text-slate-900">{N.toFixed(1)} <span className="text-lg text-slate-400 font-medium">RPM</span></p>
-          </div>
-          <div>
-             <p className="text-xs text-slate-500 font-bold uppercase tracking-wide mb-1">Diâmetro (D1_est)</p>
-            <p className="text-3xl font-extrabold text-slate-900">{D1_est.toFixed(2)} <span className="text-lg text-slate-400 font-medium">m</span></p>
-          </div>
-        </div>
-      </div>
-
-       {/* AVISOS DE SEGURANÇA */}
-       {inputs.useAdvanced && inputs.D1 <= inputs.D2 && (
-         <div className="bg-red-50 border border-red-200 text-red-700 p-5 rounded-2xl animate-in slide-in-from-top-4 duration-500 shadow-sm">
-           <strong className="font-bold">🚨 Aviso de Segurança Geométrico:</strong>
-           <span className="block mt-1 text-sm font-medium">O diâmetro de entrada (D1) não pode ser menor ou igual ao diâmetro de saída (D2). Em turbinas centrípetas, o fluxo entra pelo diâmetro maior e sai pelo menor. Verifique os valores inseridos.</span>
-         </div>
-       )}
-
-       {/* 2. CINEMÁTICA E EULER */}
-       {inputs.useAdvanced && inlet && outlet && (
-         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-           <div className="p-6 border-b border-slate-100">
-             <h2 className="text-xl font-extrabold text-slate-800">2. Análise Cinemática (Euler)</h2>
-             <p className="text-xs text-slate-500 font-medium mt-1">
-               Avaliação do intercâmbio de quantidade de movimento a partir da geometria e escoamento.
-             </p>
-           </div>
-           
-           <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6 bg-purple-50/30">
-             <div className="bg-white p-5 rounded-xl border border-purple-100 shadow-sm">
-                <p className="text-[11px] text-purple-600 font-bold uppercase tracking-widest mb-1.5">Carga Específica (Heuler)</p>
-                <p className="text-3xl font-extrabold text-slate-800">{Heuler.toFixed(1)} <span className="text-lg text-slate-400 font-medium">m</span></p>
-                <p className="text-xs text-slate-400 mt-2 font-medium">Energia bruta atuante no rotor</p>
-             </div>
-             <div className="bg-white p-5 rounded-xl border border-purple-100 shadow-sm">
-                <p className="text-[11px] text-purple-600 font-bold uppercase tracking-widest mb-1.5">Potência (Euler)</p>
-                <p className="text-3xl font-extrabold text-slate-800">{eulerPowerkW.toFixed(0)} <span className="text-lg text-slate-400 font-medium">kW</span></p>
-                <p className="text-xs text-slate-400 mt-2 font-medium">Capacidade vetorial de extração</p>
-             </div>
-             <div className="bg-white p-5 rounded-xl border border-purple-100 shadow-sm">
-                <p className="text-[11px] text-purple-600 font-bold uppercase tracking-widest mb-1.5">Rendimento Hidráulico</p>
-                <p className="text-3xl font-extrabold text-slate-800">{(hydraulicEfficiency*100).toFixed(1)} <span className="text-lg text-slate-400 font-medium">%</span></p>
-                <p className="text-xs text-slate-400 mt-2 font-medium">Heuler / Queda Líquida</p>
-             </div>
-           </div>
-
-           <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-8 border-t border-slate-100">
-              <TrianglePlot triangle={inlet} title="Entrada no Rotor (Seção 1)" />
-              <TrianglePlot triangle={outlet} title="Saída do Rotor (Seção 2)" />
-           </div>
-         </div>
-       )}
-
-       {/* 3. CFD / VALIDAÇÃO */}
-       <div className="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 overflow-hidden mt-8 text-white">
-         <div className="p-6 border-b border-slate-800">
-             <h2 className="text-xl font-extrabold text-white">3. Setup e Validação para CFD</h2>
-             <p className="text-xs text-slate-400 font-medium mt-1">Exporte as Boundary Conditions numéricas para o Solver e valide a performance estrutural e de fluidos.</p>
-         </div>
-         <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-10">
-           {/* Script */}
-           <div>
-             <div className="flex items-center justify-between mb-3">
-               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Variáveis de Expressão (Setup)</span>
-               <button 
-                 onClick={() => navigator.clipboard.writeText(cfdScript)} 
-                 className="text-xs font-bold text-slate-900 bg-sky-400 hover:bg-sky-300 transition-colors px-3 py-1.5 rounded"
-               >
-                 COPIAR
-               </button>
-             </div>
-             <pre className="bg-black/50 text-sky-300 p-5 rounded-xl text-[11px] leading-relaxed font-mono overflow-auto border border-slate-800/80 shadow-inner">
-               {cfdScript}
-             </pre>
-           </div>
-           
-           {/* Post-processing */}
-           <div className="space-y-5">
-             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Avaliação Múltipla de Resultados (CFD)</h3>
-             <div className="grid grid-cols-2 gap-4">
-               <div>
-                  <label className="text-[11px] font-bold text-slate-400 block mb-1.5">Torque Medido no Eixo [N·m]</label>
-                  <input type="number" value={simTorque} onChange={e => setSimTorque(parseFloat(e.target.value))} placeholder={outputs.torque.toFixed(0)} className="w-full bg-slate-800 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 outline-none" />
-               </div>
-               <div>
-                  <label className="text-[11px] font-bold text-slate-400 block mb-1.5">Queda P. Total Efetiva [m] <span className="opacity-50 font-normal">(Opcional)</span></label>
-                  <input type="number" value={simHead} onChange={e => setSimHead(parseFloat(e.target.value))} placeholder={inputs.H.toString()} className="w-full bg-slate-800 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 outline-none" />
-               </div>
-             </div>
-
-             {hasCFD && (
-               <div className="mt-6 p-5 bg-sky-950/40 rounded-xl border border-sky-900 animate-in zoom-in-95 duration-300">
-                 <div className="grid grid-cols-2 gap-6">
-                   <div>
-                     <p className="text-[10px] text-sky-400 font-bold uppercase tracking-widest mb-1">Potência Final (Eixo)</p>
-                     <p className="text-2xl font-extrabold text-white">{powerSimkW.toFixed(1)} <span className="text-sm font-medium text-sky-200">kW</span></p>
-                   </div>
-                   <div>
-                     <p className="text-[10px] text-sky-400 font-bold uppercase tracking-widest mb-1">Desvio vs Meta Global</p>
-                     <p className="text-2xl font-extrabold text-white">{effTargetGlobal.toFixed(1)} <span className="text-sm font-medium text-sky-200">%</span></p>
-                   </div>
-                 </div>
-                 
-                 {simHead > 0 && typeof effGlobal === 'number' && (
-                   <div className="mt-5 pt-5 border-t border-sky-900/50 grid grid-cols-2 gap-6">
-                      <div>
-                        <p className="text-[10px] text-sky-400 font-bold uppercase tracking-widest mb-1">Efic. Fluido-Mecânica</p>
-                        <p className="text-xl font-extrabold text-white">{effGlobal.toFixed(1)} %</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-sky-400 font-bold uppercase tracking-widest mb-1">Desvio vs Cinemática</p>
-                        <p className="text-xl font-extrabold text-white">{effTargetEuler.toFixed(1)} %</p>
-                      </div>
-                   </div>
-                 )}
-               </div>
-             )}
-
-           </div>
-         </div>
-       </div>
-
-    </div>
-  );
-}
-
-// Visualizador de Triângulo Simples
-function TrianglePlot({ triangle, title }: { triangle: VelocityTriangle, title: string }) {
-  const max = Math.max(triangle.U, triangle.Cm, triangle.Cu) || 1;
-  const scale = 220 / max; 
-  const originX = 40; 
-  const originY = 240; 
-
-  const pU = { x: originX + triangle.U * scale, y: originY };
-  const pC = { x: originX + triangle.Cu * scale, y: originY - triangle.Cm * scale };
-
-  return (
-    <div className="rounded-xl bg-white border border-slate-200 overflow-hidden shadow-sm">
-      <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-         <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-widest">{title}</h3>
-         <div className="flex gap-3 text-[11px] font-mono text-slate-600 font-bold">
-           <span><span className="text-blue-500 mr-1">U:</span>{triangle.U.toFixed(1)}</span>
-           <span><span className="text-red-500 mr-1">C:</span>{triangle.C.toFixed(1)}</span>
-           <span><span className="text-emerald-500 mr-1">W:</span>{triangle.W.toFixed(1)}</span>
-         </div>
-      </div>
-      <div className="relative flex justify-center py-6 bg-slate-50/30">
-        <svg width="400" height="280" className="max-w-full">
-           <defs>
-             <marker id="arrowU" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#3b82f6" /></marker>
-             <marker id="arrowC" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#ef4444" /></marker>
-             <marker id="arrowW" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#10b981" /></marker>
-           </defs>
-           <line x1="0" y1={originY} x2="400" y2={originY} stroke="#cbd5e1" strokeDasharray="3 3" />
-           <line x1={originX} y1="0" x2={originX} y2="280" stroke="#cbd5e1" strokeDasharray="3 3" />
-
-           <line x1={originX} y1={originY} x2={pU.x} y2={pU.y} stroke="#3b82f6" strokeWidth="3" markerEnd="url(#arrowU)" />
-           <line x1={originX} y1={originY} x2={pC.x} y2={pC.y} stroke="#ef4444" strokeWidth="3" markerEnd="url(#arrowC)" />
-           <line x1={pU.x} y1={pU.y} x2={pC.x} y2={pC.y} stroke="#10b981" strokeWidth="3" markerEnd="url(#arrowW)" />
-
-           <text x={originX + (triangle.U * scale) / 2} y={originY + 20} fill="#3b82f6" fontSize="13" fontWeight="bold">U</text>
-           <text x={originX + (triangle.Cu * scale) / 2 - 15} y={originY - (triangle.Cm * scale) / 2 - 5} fill="#ef4444" fontSize="13" fontWeight="bold">C</text>
-           <text x={pU.x + (pC.x - pU.x) / 2 + 10} y={pU.y + (pC.y - pU.y) / 2} fill="#10b981" fontSize="13" fontWeight="bold">W</text>
-        </svg>
-      </div>
-    </div>
-  );
-}
+// ALVOS TEÓRICOS DE TORQUE E POTÊNCIA
+Target_Torque_Global  = {res['Tg']:.2f} [N.m]
+Target_Torque_Euler   = {res['Te']:.2f} [N.m]
+'''
+        st.code(script, language='c')
+        
+        st.markdown("### Validação Pós-CFD")
+        simTorque = st.number_input("Torque Medido no Eixo CFD [N·m]", value=float(f"{res['Te']:.2f}"))
+        simHead = st.number_input("Queda Total Efetiva CFD [m] (Opcional)", value=float(f"{res['Heuler']:.2f}"))
+        
+        if simTorque > 0:
+            pSimW = simTorque * res['omega']
+            pSimkW = pSimW / 1000
+            st.success(f"**Potência Atingida CFD:** {pSimkW:.1f} kW")
+            
+            colA, colB = st.columns(2)
+            colA.metric("Desvio vs Meta Global (1D)", f"{(simTorque / res['Tg']) * 100:.1f} %")
+            colB.metric("Desvio vs Meta Euler", f"{(simTorque / res['Te']) * 100:.1f} %")
+            
+            if simHead > 0:
+                g = 9.81
+                hydPowerCFD = res['massFlow'] * g * simHead
+                effReal = (pSimW / hydPowerCFD) * 100
+                st.info(f"**Eficiência Fluido-Mecânica (CFD):** {effReal:.1f} %")
