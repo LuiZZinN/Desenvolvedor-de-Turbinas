@@ -131,22 +131,52 @@ else:
             st.warning("O modo cinemático está desativado. Os triângulos abaixo representam valores empíricos genéricos.")
             
         def plot_triangle(tri, title):
-            fig, ax = plt.subplots(figsize=(6, 4))
-            # Vetor U
-            ax.annotate(f"U={tri['U']:.1f}", xy=(tri['U'], 0), xytext=(tri['U']/2, -tri['Cm']*0.1),
-                        arrowprops=dict(color='blue', width=2, headwidth=8), color='blue')
-            # Vetor C
-            ax.annotate(f"C={tri['C']:.1f}", xy=(tri['Cu'], tri['Cm']), xytext=(tri['Cu']/2, tri['Cm']/2),
-                        arrowprops=dict(color='red', width=2, headwidth=8), color='red')
-            # Vetor W
-            ax.annotate(f"W={tri['W']:.1f}", xy=(tri['Cu'], tri['Cm']), xytext=(tri['U'] - tri['Wu']/2, tri['Cm']/2),
-                        arrowprops=dict(color='green', width=2, headwidth=8), color='green')
+            fig, ax = plt.subplots(figsize=(8, 5))
             
-            ax.set_xlim(min(0, tri['Cu'], tri['U']) - max(tri['U'], tri['Cm'])*0.1, max(tri['U'], tri['Cu']) * 1.2)
-            ax.set_ylim(-max(tri['U'], tri['Cm'])*0.1, tri['Cm'] * 1.2)
-            ax.set_title(title)
-            ax.axis('equal')
-            ax.grid(True, linestyle='--', alpha=0.5)
+            # Ponto O (Origem = 0,0)
+            # Ponto U (Ponta vetor U = U, 0)
+            # Ponto C (Ponta vetor C = Cu, Cm)
+            
+            # Desenhando Vetores
+            ax.annotate("", xy=(tri['U'], 0), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#3b82f6", lw=2.5))
+            ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(0, 0), arrowprops=dict(arrowstyle="->", color="#ef4444", lw=2.5))
+            ax.annotate("", xy=(tri['Cu'], tri['Cm']), xytext=(tri['U'], 0), arrowprops=dict(arrowstyle="->", color="#10b981", lw=2.5))
+            
+            # Labels dos Vetores
+            ax.text(tri['U']/2, -tri['Cm']*0.05, f"U = {tri['U']:.1f} m/s", color="#3b82f6", ha='center', va='top', fontweight='bold')
+            ax.text(tri['Cu']/2 - tri['U']*0.02, tri['Cm']/2, f"C = {tri['C']:.1f}", color="#ef4444", ha='right', va='bottom', fontweight='bold')
+            ax.text((tri['U'] + tri['Cu'])/2 + 0.1, tri['Cm']/2, f"W = {tri['W']:.1f}", color="#10b981", ha='left', va='bottom', fontweight='bold')
+            
+            # Ângulos
+            alpha_str = f"α={tri['alpha']:.1f}°"
+            beta_str = f"β={tri['beta']:.1f}°"
+            ax.text(tri['Cu']*0.1, tri['Cm']*0.05, alpha_str, color="#ef4444", fontsize=10, fontweight='bold', ha='left')
+            
+            # Posicionamento Beta:
+            dx_w = tri['Cu'] - tri['U']
+            ax.text(tri['U'] + dx_w*0.1, tri['Cm']*0.05, beta_str, color="#10b981", fontsize=10, fontweight='bold', ha='right' if dx_w < 0 else 'left')
+
+            # Linhas de guia (Meridional e Tangencial)
+            ax.plot([tri['Cu'], tri['Cu']], [0, tri['Cm']], color='black', linestyle='--', alpha=0.3)
+            ax.text(tri['Cu'], tri['Cm']/2, f"Cm={tri['Cm']:.1f}", fontsize=8, color="gray", rotation=90, verticalalignment='center')
+            
+            # Configuração de eixos paramétrica
+            all_x = [0, tri['U'], tri['Cu']]
+            span_x = max(all_x) - min(all_x)
+            if span_x == 0: span_x = 1
+            
+            ax.set_xlim(min(all_x) - span_x * 0.15, max(all_x) + span_x * 0.15)
+            ax.set_ylim(-tri['Cm'] * 0.15, tri['Cm'] * 1.25)
+            ax.set_aspect('equal') # Mantém o triângulo na proporção geométrica real
+            ax.set_title(title, fontweight='bold', color="#1e293b", pad=15)
+            ax.grid(True, linestyle=':', alpha=0.6)
+            
+            # Esconder bordas superiores e laterais
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#cbd5e1')
+            ax.spines['bottom'].set_color('#cbd5e1')
+            
             return fig
             
         col_t1, col_t2 = st.columns(2)
